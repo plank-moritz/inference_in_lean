@@ -25,8 +25,7 @@ instance {sig : Signature} {X : Variables} : Membership (Equality sig X) (Equali
   List.instMembership
 
 @[simp]
-def EqualityProblem.freeVars {sig : Signature} {X : Variables} :
-    EqualityProblem sig X -> Set X
+def EqualityProblem.freeVars {sig : Signature} {X : Variables} : EqualityProblem sig X -> Set X
   | [] => ∅
   | (lhs, rhs) :: eqs => Term.freeVars sig X lhs ∪ Term.freeVars sig X rhs ∪ freeVars eqs
 
@@ -69,3 +68,78 @@ theorem unifiable_iff_mgu_idempot {sig : Signature} {X : Variables} [inst : Deci
     obtain ⟨σ, ⟨⟨⟩⟩⟩ := h
     use σ
 alias main_unification_theorem := unifiable_iff_mgu_idempot
+
+
+/- Rule-Based Naive Standard Unification Algorithm -/
+
+def var_includes {sig : Signature} {X : Variables} [DecidableEq X] (s : Term sig X) (var : List X) : Bool :=
+match s with
+  | Term.var x => (x ∈ var)
+  | _ => false
+
+def term_includes {sig : Signature} {X : Variables} [DecidableEq X] (s : Term sig X) (x : X) : Bool :=
+match s with
+  | Term.var y => (x == y)
+  | Term.func _ [] => false
+  | Term.func f (a :: args) =>
+      if (term_includes a x) then true
+      else (term_includes (Term.func f args) x)
+
+def E_includes {sig : Signature} {X : Variables} [DecidableEq X] (E : EqualityProblem sig X) (x : X) : Bool :=
+match E with
+  | [] => false
+  | (s, t) :: args =>
+      if ((term_includes s x) || (term_includes t x)) then true
+      else (E_includes args x)
+
+def decomposition {sig : Signature} {X : Variables} (E : EqualityProblem sig X) (args bargs: List (Term sig X)) : Option (EqualityProblem sig X) :=
+
+  let rec decomposition_rec (E : EqualityProblem sig X) (args bargs: List (Term sig X)) : EqualityProblem sig X :=
+    match args, bargs with
+      | (a :: aa), (b :: bb) =>
+        let e : Equality sig X := (a, b)
+        decomposition_rec (e :: E) aa bb
+      | _, _ => E
+
+decomposition_rec E args bargs
+
+/-Termination proof still to be done; tried out different approaches so far but Lean still cannot observe eventual termination.
+  Therefore, the definition is for now partial -/
+partial def Naive_Standard_Unification {sig : Signature} {X : Variables} [DecidableEq X] [BEq sig.funs]
+(E : EqualityProblem sig X) (var: List X) (σ : Substitution sig X) : Option (Substitution sig X) :=
+
+match E with
+| [] => some σ
+| (s, t) :: E' =>
+
+  let s' := (s.substitute σ)
+  let t' := (t.substitute σ)
+
+  if (eqTerm sig X s' t') then (Naive_Standard_Unification E' var σ)
+
+  else let (s'', t'') :=
+    match s', t' with
+      | _, Term.var y =>
+        if ¬(var_includes s' var) then (Term.var y, s')
+        else (s', t')
+      | _, _ => (s', t')
+
+    match s'', t'' with
+
+    | Term.func f args, Term.func g bargs =>
+      if (f == g) && (args.length == bargs.length) then
+        match (decomposition E args bargs) with
+        | some Eq => (Naive_Standard_Unification Eq var σ)
+        | none => none
+      else none
+
+    | Term.var x, _ =>
+      if (E_includes E x) && ¬(term_includes t'' x) then
+        let hσ := (σ.modify x t'')
+        let E' := E.map (fun (s,t) => (s.substitute hσ, t.substitute hσ))
+        let e : Equality sig X := (Term.var x, t'')
+        Naive_Standard_Unification (e :: E') var hσ
+      else if (term_includes t'' x) && ¬(eqTerm sig X s'' t'') then none
+      else none
+
+    | Term.func _ _, Term.var _ => none

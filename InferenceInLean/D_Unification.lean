@@ -92,7 +92,8 @@ match E with
       if ((term_includes s x) || (term_includes t x)) then true
       else (E_includes args x)
 
-def decomposition {sig : Signature} {X : Variables} (E : EqualityProblem sig X) (args bargs: List (Term sig X)) : Option (EqualityProblem sig X) :=
+
+def decomposition {sig : Signature} {X : Variables} (E : EqualityProblem sig X) (args bargs: List (Term sig X)) : EqualityProblem sig X :=
 
   let rec decomposition_rec (E : EqualityProblem sig X) (args bargs: List (Term sig X)) : EqualityProblem sig X :=
     match args, bargs with
@@ -105,32 +106,29 @@ decomposition_rec E args bargs
 
 /-Termination proof still to be done; tried out different approaches so far but Lean still cannot observe eventual termination.
   Therefore, the definition is for now partial -/
-partial def Naive_Standard_Unification {sig : Signature} {X : Variables} [DecidableEq X] [BEq sig.funs]
-(E : EqualityProblem sig X) (var: List X) (σ : Substitution sig X) : Option (Substitution sig X) :=
+def standard_unification_steps {sig : Signature} {X : Variables} [DecidableEq X] [BEq sig.funs]
+(E : EqualityProblem sig X) (var: List X) (σ : Substitution sig X) : Option (EqualityProblem sig X × Substitution sig X) :=
 
 match E with
-| [] => some σ
+| [] => some ([], σ)
 | (s, t) :: E' =>
 
   let s' := (s.substitute σ)
   let t' := (t.substitute σ)
 
-  if (eqTerm sig X s' t') then (Naive_Standard_Unification E' var σ)
+  if (eqTerm sig X s' t') then some (E', σ)
 
   else let (s'', t'') :=
     match s', t' with
-      | _, Term.var y =>
-        if ¬(var_includes s' var) then (Term.var y, s')
-        else (s', t')
+      | _, Term.var y => if ¬(var_includes s' var) then (Term.var y, s') else (s', t')
       | _, _ => (s', t')
 
     match s'', t'' with
 
     | Term.func f args, Term.func g bargs =>
-      if (f == g) && (args.length == bargs.length) then
-        match (decomposition E args bargs) with
-        | some Eq => (Naive_Standard_Unification Eq var σ)
-        | none => none
+      if (f == g) && (args.length == bargs.length)
+        then let Eq := (decomposition E args bargs)
+        some (Eq,σ)
       else none
 
     | Term.var x, _ =>
@@ -138,8 +136,17 @@ match E with
         let hσ := (σ.modify x t'')
         let E' := E.map (fun (s,t) => (s.substitute hσ, t.substitute hσ))
         let e : Equality sig X := (Term.var x, t'')
-        Naive_Standard_Unification (e :: E') var hσ
+        some ((e::E'), σ)
       else if (term_includes t'' x) && ¬(eqTerm sig X s'' t'') then none
       else none
 
     | Term.func _ _, Term.var _ => none
+
+
+partial def standard_unification {sig : Signature} {X : Variables} [DecidableEq X] [BEq sig.funs]
+(E : EqualityProblem sig X) (var: List X) (σ : Substitution sig X) : Option (Substitution sig X) :=
+
+match (standard_unification_steps E var σ) with
+| none => none
+| some ([], σ') => some σ'
+| some (E', σ') => (standard_unification E' var σ')
